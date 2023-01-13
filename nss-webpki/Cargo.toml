@@ -9,6 +9,6 @@ license = "MPL-2.0"
 [dependencies]
 nss = { version = "0.7.0", path = ".." }
 time = "0.1.35"
-untrusted = "0.3.1"
+untrusted = "0.3.2"
 webpki = "0.3.0"
 mozilla-ca-certs = "0.1"
