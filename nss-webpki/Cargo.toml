@@ -10,5 +10,5 @@ license = "MPL-2.0"
 nss = { version = "0.7.0", path = ".." }
 time = "0.1.35"
 untrusted = "0.6.2"
-webpki = "0.3.0"
+webpki = "0.18.1"
 mozilla-ca-certs = "0.1"
