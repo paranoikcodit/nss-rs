@@ -2,9 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-use nss_sys as ffi;
 use super::{sec_item_as_slice, wrap_ffi, Result};
-use nspr::{ListNode, Listable, ListIterator};
+use nspr::{ListIterator, ListNode, Listable};
+use nss_sys as ffi;
 use std::ffi::CStr;
 use std::marker::PhantomData;
 use std::mem;
@@ -40,15 +40,11 @@ impl Certificate {
     }
 
     pub fn as_der(&self) -> &[u8] {
-        unsafe {
-            sec_item_as_slice(&self.as_ffi_ref().derCert)
-        }
+        unsafe { sec_item_as_slice(&self.as_ffi_ref().derCert) }
     }
 
     pub fn verify_name(&self, host_name: &CStr) -> Result<()> {
-        wrap_ffi(|| unsafe {
-            ffi::CERT_VerifyCertName(self.as_raw_ptr(), host_name.as_ptr())
-        })
+        wrap_ffi(|| unsafe { ffi::CERT_VerifyCertName(self.as_raw_ptr(), host_name.as_ptr()) })
     }
 }
 
@@ -73,9 +69,7 @@ impl<'a> Listable for BorrowedCertificate<'a> {
 impl<'a> Deref for BorrowedCertificate<'a> {
     type Target = Certificate;
     fn deref(&self) -> &Certificate {
-        unsafe {
-            mem::transmute(self)
-        }
+        unsafe { mem::transmute(self) }
     }
 }
 
@@ -119,9 +113,7 @@ impl<'a> IntoIterator for &'a CertList {
     type Item = BorrowedCertificate<'a>;
     type IntoIter = ListIterator<'a, Self::Item>;
     fn into_iter(self) -> Self::IntoIter {
-        unsafe {
-            ListIterator::new(&(*self.0).list as *const _ as ListNode)
-        }
+        unsafe { ListIterator::new(&(*self.0).list as *const _ as ListNode) }
     }
 }
 

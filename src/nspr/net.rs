@@ -3,20 +3,26 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use libc::{c_int, AF_INET, AF_INET6};
-use nss_sys::nspr as ffi;
-use std::net::{SocketAddr,SocketAddrV4,SocketAddrV6,Ipv4Addr,Ipv6Addr};
-use std::mem;
-use std::u16;
 use nspr::error::Result;
 use nspr::fd::File;
+use nss_sys::nspr as ffi;
+use std::mem;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::u16;
 use wrap_ffi;
 
 // FIXME is this going to be a "strict aliasing" problem?
 pub struct NetAddrStorage(ffi::PRNetAddrInet6);
 impl NetAddrStorage {
-    pub fn new() -> Self { unsafe { mem::uninitialized() } }
-    pub fn as_ptr(&self) -> *const ffi::PRNetAddr { self as *const NetAddrStorage as *const _ }
-    pub fn as_mut_ptr(&mut self) -> *mut ffi::PRNetAddr { self as *mut NetAddrStorage as *mut _ }
+    pub fn new() -> Self {
+        unsafe { mem::MaybeUninit::uninit().assume_init_read() }
+    }
+    pub fn as_ptr(&self) -> *const ffi::PRNetAddr {
+        self as *const NetAddrStorage as *const _
+    }
+    pub fn as_mut_ptr(&mut self) -> *mut ffi::PRNetAddr {
+        self as *mut NetAddrStorage as *mut _
+    }
 }
 
 pub unsafe fn read_net_addr(ptr: *const ffi::PRNetAddr) -> Option<SocketAddr> {
@@ -26,7 +32,10 @@ pub unsafe fn read_net_addr(ptr: *const ffi::PRNetAddr) -> Option<SocketAddr> {
         let ptr = ptr as *const ffi::PRNetAddrInet;
         let port = u16::from_be((*ptr).port);
         let ip: [u8; 4] = mem::transmute((*ptr).ip);
-        Some(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3]), port)))
+        Some(SocketAddr::V4(SocketAddrV4::new(
+            Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3]),
+            port,
+        )))
     } else if family == AF_INET6 as u16 {
         let ptr = ptr as *const ffi::PRNetAddrInet6;
         let port = u16::from_be((*ptr).port);
@@ -34,9 +43,12 @@ pub unsafe fn read_net_addr(ptr: *const ffi::PRNetAddr) -> Option<SocketAddr> {
         for seg in ip.iter_mut() {
             *seg = u16::from_be(*seg)
         }
-        Some(SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::new(ip[0], ip[1], ip[2], ip[3],
-                                                            ip[4], ip[5], ip[6], ip[7]),
-                                              port, (*ptr).flowinfo, (*ptr).scope_id)))
+        Some(SocketAddr::V6(SocketAddrV6::new(
+            Ipv6Addr::new(ip[0], ip[1], ip[2], ip[3], ip[4], ip[5], ip[6], ip[7]),
+            port,
+            (*ptr).flowinfo,
+            (*ptr).scope_id,
+        )))
     } else {
         None
     }
@@ -49,7 +61,7 @@ pub unsafe fn write_net_addr(ptr: *mut ffi::PRNetAddr, addr: SocketAddr) {
                 family: AF_INET as u16,
                 port: u16::to_be(addr.port()),
                 ip: mem::transmute(addr.ip().octets()),
-                pad: mem::uninitialized(),
+                pad: mem::MaybeUninit::uninit().assume_init_read(),
             }
         }
         SocketAddr::V6(addr) => {
@@ -81,10 +93,10 @@ pub fn new_udp_socket(af: c_int) -> Result<File> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nss_sys::nspr as ffi;
     use libc::AF_INET;
+    use nss_sys::nspr as ffi;
     use std::mem;
-    use std::net::{SocketAddr,SocketAddrV4,SocketAddrV6,Ipv4Addr,Ipv6Addr};
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
     #[test]
     fn drop_tcp() {
@@ -102,21 +114,24 @@ mod tests {
         let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 128, 129, 130), 443));
 
         unsafe { write_net_addr(buf.as_mut_ptr() as *mut ffi::PRNetAddr, addr) };
-        let got_addr = (unsafe { read_net_addr(buf.as_ptr() as *const ffi::PRNetAddr)}).unwrap();
+        let got_addr = (unsafe { read_net_addr(buf.as_ptr() as *const ffi::PRNetAddr) }).unwrap();
         assert_eq!(got_addr, addr);
     }
 
     #[test]
     fn v6_addr_rdwr() {
         let mut buf = vec![0u8; mem::size_of::<ffi::PRNetAddrInet6>()];
-        let addr = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::new(0x2001, 0xdb8, 0x405, 0x607,
-                                                                  0x809, 0xa0b, 0xc0d, 0xe0f),
-                                                    8080, 0x23456, 0x23456789));
-        
+        let addr = SocketAddr::V6(SocketAddrV6::new(
+            Ipv6Addr::new(0x2001, 0xdb8, 0x405, 0x607, 0x809, 0xa0b, 0xc0d, 0xe0f),
+            8080,
+            0x23456,
+            0x23456789,
+        ));
+
         unsafe { write_net_addr(buf.as_mut_ptr() as *mut ffi::PRNetAddr, addr) };
-        let got_addr = (unsafe { read_net_addr(buf.as_ptr() as *const ffi::PRNetAddr)}).unwrap();
+        let got_addr = (unsafe { read_net_addr(buf.as_ptr() as *const ffi::PRNetAddr) }).unwrap();
         assert_eq!(got_addr, addr);
     }
-    
+
     // Need better tests that these are actually meaning-preserving, not just inverses.
 }

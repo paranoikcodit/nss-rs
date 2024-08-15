@@ -10,10 +10,10 @@ pub mod time;
 use nss_sys::nspr as ffi;
 
 use std::marker::PhantomData;
-use std::sync::{Once, ONCE_INIT};
+use std::sync::Once;
 
-use GenStatus;
 pub use self::fd::File;
+use GenStatus;
 
 pub fn init() {
     // NSPR initialization is done implicitly on the first call to any
@@ -21,7 +21,7 @@ pub fn init() {
     // equivalent of `Once` can't be used because its threading layer
     // isn't initialized yet, and its atomics are polyfilled with
     // thread mutexes on some platforms so they're also off-limits.
-    static PR_INIT_ONCE: Once = ONCE_INIT;
+    static PR_INIT_ONCE: Once = Once::new();
     PR_INIT_ONCE.call_once(|| {
         // These argument values haven't been used since before NSPR
         // was released as open source, but fill in something reasonable.
@@ -65,7 +65,6 @@ pub fn bool_to_nspr(b: bool) -> ffi::PRBool {
         ffi::PR_FALSE
     }
 }
-
 
 pub type ListNode = *mut ffi::PRCList;
 

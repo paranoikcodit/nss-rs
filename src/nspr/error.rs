@@ -25,14 +25,10 @@ impl ErrorCode {
         ErrorCode(unsafe { ffi::PR_GetError() })
     }
     pub fn to_name(self) -> Option<&'static CStr> {
-        unsafe {
-            to_cstr_opt(ffi::PR_ErrorToName(self.0))
-        }
+        unsafe { to_cstr_opt(ffi::PR_ErrorToName(self.0)) }
     }
     pub fn to_descr(self) -> Option<&'static CStr> {
-        unsafe {
-            to_cstr_opt(ffi::PR_ErrorToString(self.0, ffi::PR_LANGUAGE_I_DEFAULT))
-        }
+        unsafe { to_cstr_opt(ffi::PR_ErrorToString(self.0, ffi::PR_LANGUAGE_I_DEFAULT)) }
     }
 }
 
@@ -58,10 +54,10 @@ impl error::Error for ErrorCode {
     fn description(&self) -> &str {
         match self.to_descr() {
             Some(cs) => cs.to_str().unwrap(),
-            None => "Unknown error"
+            None => "Unknown error",
         }
     }
-    fn cause(&self) -> Option<&error::Error> {
+    fn cause(&self) -> Option<&dyn error::Error> {
         None
     }
 }
@@ -89,7 +85,6 @@ macro_rules! error_kinds {
     }
 }
 
-
 #[derive(Clone, Copy, Debug)]
 pub struct Error {
     pub nspr_error: ErrorCode,
@@ -110,7 +105,10 @@ impl Error {
 }
 impl From<ErrorCode> for Error {
     fn from(err: ErrorCode) -> Self {
-        Error { nspr_error: err, os_error: 0 }
+        Error {
+            nspr_error: err,
+            os_error: 0,
+        }
     }
 }
 // Are From/Into really right for lossy conversions like these?
@@ -119,8 +117,7 @@ impl Into<io::Error> for Error {
         if self.os_error != 0 {
             io::Error::from_raw_os_error(self.os_error)
         } else {
-            io::Error::new(self.nspr_error.kind(),
-                           Box::new(self.nspr_error))
+            io::Error::new(self.nspr_error.kind(), Box::new(self.nspr_error))
         }
     }
 }

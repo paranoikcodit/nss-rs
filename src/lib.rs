@@ -18,23 +18,23 @@ use std::cell::RefCell;
 use std::cmp;
 use std::ffi::CStr;
 use std::mem;
-use std::ops::{Deref,DerefMut};
+use std::ops::{Deref, DerefMut};
 use std::panic;
 use std::ptr;
 use std::slice;
 
+pub use cert::{CertList, Certificate};
 pub use error::{Error, Result};
+use error::{PR_UNKNOWN_ERROR, PR_WOULD_BLOCK_ERROR};
+use nspr::fd::{BorrowedFile, RawFile};
 pub use nspr::fd::{File, FileMethods, FileWrapper};
-pub use cert::{Certificate, CertList};
-use nspr::fd::{RawFile, BorrowedFile};
 use nspr::{bool_from_nspr, bool_to_nspr};
-use error::{PR_WOULD_BLOCK_ERROR, PR_UNKNOWN_ERROR};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ErrorCode(ffi::nspr::PRErrorCode);
 
 thread_local! {
-    static INNER_PANIC: RefCell<Option<Box<Any + Send + 'static>>> = RefCell::new(None)
+    static INNER_PANIC: RefCell<Option<Box<dyn Any + Send + 'static>>> = RefCell::new(None)
 }
 
 fn panic_pending() -> bool {
@@ -60,8 +60,9 @@ impl From<ffi::SECStatus> for GenStatus<()> {
 }
 
 fn wrap_ffi<T, R, F>(f: F) -> Result<T>
-    where R: Into<GenStatus<T>>,
-          F: FnOnce() -> R
+where
+    R: Into<GenStatus<T>>,
+    F: FnOnce() -> R,
 {
     debug_assert!(!panic_pending());
     let result = match f().into() {
@@ -77,7 +78,8 @@ fn wrap_ffi<T, R, F>(f: F) -> Result<T>
 }
 
 fn wrap_callback<R, F>(failed: R, f: F) -> R
-    where F: FnOnce() -> Result<R>
+where
+    F: FnOnce() -> Result<R>,
 {
     let f = panic::AssertUnwindSafe(f);
     let res = if panic_pending() {
@@ -95,15 +97,19 @@ fn wrap_callback<R, F>(failed: R, f: F) -> R
             Err(PR_UNKNOWN_ERROR.into())
         })
     };
-    res.unwrap_or_else(|err| { err.set(); failed })
+    res.unwrap_or_else(|err| {
+        err.set();
+        failed
+    })
 }
 
 fn result_bool_getter<F>(f: F) -> Result<bool>
-    where F: FnOnce(*mut ffi::nspr::PRBool) -> ffi::SECStatus
+where
+    F: FnOnce(*mut ffi::nspr::PRBool) -> ffi::SECStatus,
 {
     // Poison this with a bad value; bool_from_nspr will panic if it's still there.
     let mut value: ffi::nspr::PRBool = 0x5a;
-    try!(wrap_ffi(|| f(&mut value as *mut _)));
+    wrap_ffi(|| f(&mut value as *mut _))?;
     Ok(bool_from_nspr(value))
 }
 
@@ -160,15 +166,14 @@ impl<Callbacks> TLSSocket<Callbacks> {
     pub fn new(inner: File, callbacks: Callbacks) -> Result<Self> {
         Self::new_with_model(inner, callbacks, None)
     }
-    pub fn new_with_model(inner: File, callbacks: Callbacks, model: Option<Self>) -> Result<Self>
-    {
+    pub fn new_with_model(inner: File, callbacks: Callbacks, model: Option<Self>) -> Result<Self> {
         if let Some(_) = model {
             // This will copy the callbacks; need to unset or fix them.
             unimplemented!();
         }
         let raw_model = model.map_or(nspr::fd::null(), |fd| fd.as_raw_prfd());
         unsafe {
-            let file = try!(wrap_ffi(move || {
+            let file = wrap_ffi(move || {
                 let raw = ffi::SSL_ImportFD(raw_model, inner.as_raw_prfd());
                 // This call can "succeed" (return non-null) but have
                 // panicked in Rust.  And we retain ownership of
@@ -181,7 +186,7 @@ impl<Callbacks> TLSSocket<Callbacks> {
                     mem::forget(inner);
                 }
                 File::from_raw_prfd_err(raw)
-            }));
+            })?;
             Ok(TLSSocket(Box::new(TLSSocketImpl {
                 file: file,
                 callbacks: callbacks,
@@ -190,13 +195,16 @@ impl<Callbacks> TLSSocket<Callbacks> {
     }
 
     pub fn use_auth_certificate_hook(&mut self) -> Result<()>
-        where Callbacks: AuthCertificateHook
+    where
+        Callbacks: AuthCertificateHook,
     {
         let this: BorrowedTLSSocket<_> = &*self;
         wrap_ffi(|| unsafe {
-            ffi::SSL_AuthCertificateHook(self.as_raw_prfd(),
-                                         Some(raw_auth_certificate_hook::<Callbacks>),
-                                         mem::transmute(this))
+            ffi::SSL_AuthCertificateHook(
+                self.as_raw_prfd(),
+                Some(raw_auth_certificate_hook::<Callbacks>),
+                mem::transmute(this),
+            )
         })
     }
 }
@@ -208,34 +216,24 @@ impl<Callbacks> TLSSocketImpl<Callbacks> {
     // callbacks_mut would be sound, but would anything use it?
 
     pub fn peer_cert(&self) -> Option<Certificate> {
-        unsafe { 
-            Certificate::from_raw_ptr_opt(ffi::SSL_PeerCertificate(self.as_raw_prfd()))
-        }
+        unsafe { Certificate::from_raw_ptr_opt(ffi::SSL_PeerCertificate(self.as_raw_prfd())) }
     }
 
     pub fn peer_cert_chain(&self) -> Option<CertList> {
-        unsafe {
-            CertList::from_raw_ptr_opt(ffi::SSL_PeerCertificateChain(self.as_raw_prfd()))
-        }
+        unsafe { CertList::from_raw_ptr_opt(ffi::SSL_PeerCertificateChain(self.as_raw_prfd())) }
     }
 
     pub fn cleartext(&self) -> BorrowedFile {
-        unsafe {
-            BorrowedFile::from_raw_prfd((*self.as_raw_prfd()).lower)
-        }
+        unsafe { BorrowedFile::from_raw_prfd((*self.as_raw_prfd()).lower) }
     }
 
     pub fn set_url(&self, url: &CStr) -> Result<()> {
-        wrap_ffi(|| unsafe {
-            ffi::SSL_SetURL(self.as_raw_prfd(), url.as_ptr())
-        })
+        wrap_ffi(|| unsafe { ffi::SSL_SetURL(self.as_raw_prfd(), url.as_ptr()) })
     }
 
     pub fn unset_bad_cert_hook(&mut self) -> Result<()> {
         // This doesn't take locks in the C code, so needs a unique ref.
-        wrap_ffi(|| unsafe {
-            ffi::SSL_BadCertHook(self.as_raw_prfd(), None, ptr::null_mut())
-        })
+        wrap_ffi(|| unsafe { ffi::SSL_BadCertHook(self.as_raw_prfd(), None, ptr::null_mut()) })
     }
 
     pub fn unset_auth_certificate_hook(&mut self) -> Result<()> {
@@ -271,24 +269,24 @@ impl<Callbacks> TLSSocketImpl<Callbacks> {
             min: min.to_ffi(),
             max: max.to_ffi(),
         };
-        wrap_ffi(|| unsafe {
-            ffi::SSL_VersionRangeSet(self.as_raw_prfd(), &range as *const _)
-        })
+        wrap_ffi(|| unsafe { ffi::SSL_VersionRangeSet(self.as_raw_prfd(), &range as *const _) })
     }
 
-
     pub fn get_version_range(&self) -> Result<(TLSVersion, TLSVersion)> {
-        let mut range = ffi::SSLVersionRange { min: 0xffff, max: 0 };
-        try!(wrap_ffi(|| unsafe {
-            ffi::SSL_VersionRangeSet(self.as_raw_prfd(), &mut range as *mut _)
-        }));
+        let mut range = ffi::SSLVersionRange {
+            min: 0xffff,
+            max: 0,
+        };
+        wrap_ffi(|| unsafe { ffi::SSL_VersionRangeSet(self.as_raw_prfd(), &mut range as *mut _) })?;
         Ok((TLSVersion(range.min), TLSVersion(range.max)))
     }
 
     pub fn limit_version(&self, min: Option<TLSVersion>, max: Option<TLSVersion>) -> Result<()> {
-        let (abs_min, abs_max) = try!(TLSVersion::supported_range());
-        self.set_version_range(min.map_or(abs_min, |min| cmp::max(min, abs_min)),
-                               max.map_or(abs_max, |max| cmp::min(max, abs_max)))
+        let (abs_min, abs_max) = TLSVersion::supported_range()?;
+        self.set_version_range(
+            min.map_or(abs_min, |min| cmp::max(min, abs_min)),
+            max.map_or(abs_max, |max| cmp::min(max, abs_max)),
+        )
     }
 
     pub fn set_ciphersuite_enabled(&self, suite: TLSCipherSuite, enabled: bool) -> Result<()> {
@@ -305,24 +303,29 @@ impl<Callbacks> TLSSocketImpl<Callbacks> {
 }
 
 pub trait AuthCertificateHook: Sized {
-    fn auth_certificate(&self, sock: BorrowedTLSSocket<Self>, check_sig: bool, is_server: bool)
-                        -> Result<()>;
+    fn auth_certificate(
+        &self,
+        sock: BorrowedTLSSocket<Self>,
+        check_sig: bool,
+        is_server: bool,
+    ) -> Result<()>;
 }
 
-unsafe extern "C" fn raw_auth_certificate_hook<Callbacks>(arg: *mut c_void,
-                                                          fd: *mut ffi::nspr::PRFileDesc,
-                                                          check_sig: ffi::nspr::PRBool,
-                                                          is_server: ffi::nspr::PRBool)
-                                                          -> ffi::SECStatus
-    where Callbacks: AuthCertificateHook
+unsafe extern "C" fn raw_auth_certificate_hook<Callbacks>(
+    arg: *mut c_void,
+    fd: *mut ffi::nspr::PRFileDesc,
+    check_sig: ffi::nspr::PRBool,
+    is_server: ffi::nspr::PRBool,
+) -> ffi::SECStatus
+where
+    Callbacks: AuthCertificateHook,
 {
     wrap_callback(ffi::SECFailure, || {
         // TODO: check identity?
         let this: BorrowedTLSSocket<Callbacks> = mem::transmute(arg);
         assert_eq!(this.as_raw_prfd(), fd);
-        this.callbacks.auth_certificate(this,
-                                        bool_from_nspr(check_sig),
-                                        bool_from_nspr(is_server))
+        this.callbacks
+            .auth_certificate(this, bool_from_nspr(check_sig), bool_from_nspr(is_server))
             .map(|()| ffi::SECSuccess)
     })
 }
@@ -331,7 +334,9 @@ unsafe extern "C" fn raw_auth_certificate_hook<Callbacks>(arg: *mut c_void,
 pub struct TLSOption(ffi::nspr::PRInt32);
 
 impl TLSOption {
-    pub fn to_ffi(self) -> ffi::nspr::PRInt32 { self.0 }
+    pub fn to_ffi(self) -> ffi::nspr::PRInt32 {
+        self.0
+    }
 }
 
 macro_rules! def_options {{ $($name:ident,)* } => {
@@ -377,12 +382,17 @@ def_options! {
 pub struct TLSVersion(ffi::nspr::PRUint16);
 
 impl TLSVersion {
-    pub fn to_ffi(self) -> ffi::nspr::PRUint16 { self.0 }
+    pub fn to_ffi(self) -> ffi::nspr::PRUint16 {
+        self.0
+    }
     pub fn supported_range() -> Result<(Self, Self)> {
-        let mut range = ffi::SSLVersionRange { min: 0xffff, max: 0 };
-        try!(wrap_ffi(|| unsafe {
+        let mut range = ffi::SSLVersionRange {
+            min: 0xffff,
+            max: 0,
+        };
+        wrap_ffi(|| unsafe {
             ffi::SSL_VersionRangeGetSupported(ffi::ssl_variant_stream, &mut range as *mut _)
-        }));
+        })?;
         Ok((TLSVersion(range.min), TLSVersion(range.max)))
     }
 }
@@ -399,17 +409,19 @@ pub struct TLSCipherSuite(ffi::nspr::PRUint16);
 
 impl TLSCipherSuite {
     // No, I don't know why the functions take what's really a u16 as an i32.
-    pub fn to_ffi(self) -> ffi::nspr::PRInt32 { self.0 as ffi::nspr::PRInt32 }
+    pub fn to_ffi(self) -> ffi::nspr::PRInt32 {
+        self.0 as ffi::nspr::PRInt32
+    }
     pub fn implemented() -> &'static [Self] {
         unsafe {
-            slice::from_raw_parts(ffi::SSL_GetImplementedCiphers() as *const Self,
-                                  ffi::SSL_GetNumImplementedCiphers() as usize)
+            slice::from_raw_parts(
+                ffi::SSL_GetImplementedCiphers() as *const Self,
+                ffi::SSL_GetNumImplementedCiphers() as usize,
+            )
         }
     }
     pub fn is_default_enabled(&self) -> Result<bool> {
-        result_bool_getter(|bptr| unsafe {
-            ffi::SSL_CipherPrefGetDefault(self.to_ffi(), bptr)
-        })
+        result_bool_getter(|bptr| unsafe { ffi::SSL_CipherPrefGetDefault(self.to_ffi(), bptr) })
     }
 }
 
@@ -504,10 +516,10 @@ def_ciphers! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use error::{PR_NOT_CONNECTED_ERROR, PR_IS_CONNECTED_ERROR, PR_END_OF_FILE_ERROR};
-    use std::net::{SocketAddr,SocketAddrV4,Ipv4Addr};
-    use std::sync::{Arc, Mutex};
+    use error::{PR_END_OF_FILE_ERROR, PR_IS_CONNECTED_ERROR, PR_NOT_CONNECTED_ERROR};
+    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     fn fake_addr() -> SocketAddr {
@@ -536,7 +548,7 @@ mod tests {
         }
 
         impl FileMethods for FakeSocket {
-            fn read(&self, _buf: &mut[u8]) -> Result<usize> {
+            fn read(&self, _buf: &mut [u8]) -> Result<usize> {
                 Ok(0)
             }
             fn write(&self, buf: &[u8]) -> Result<usize> {
@@ -546,8 +558,12 @@ mod tests {
             fn send(&self, buf: &[u8], _timeout: Option<Duration>) -> Result<usize> {
                 self.write(buf)
             }
-            fn recv(&self, buf: &mut [u8], _peek: bool, _timeout: Option<Duration>) -> Result<usize>
-            {
+            fn recv(
+                &self,
+                buf: &mut [u8],
+                _peek: bool,
+                _timeout: Option<Duration>,
+            ) -> Result<usize> {
                 self.read(buf)
             }
             fn getpeername(&self) -> Result<SocketAddr> {
@@ -583,7 +599,9 @@ mod tests {
     #[should_panic(expected = "not yet implemented")]
     fn inner_panic1() {
         struct BrokenSocket;
-        impl FileMethods for BrokenSocket { /* `unimplemented!()` *all* the things! */ }
+        impl FileMethods for BrokenSocket {
+            /* `unimplemented!()` *all* the things! */
+        }
 
         init().unwrap();
         let inner = BrokenSocket;
